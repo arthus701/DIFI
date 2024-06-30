@@ -118,7 +118,7 @@ def forward_Sq_d_Re(r, theta, phi, t, f107, s):
         + (s['nmax'] - s['mmax']) * (2 * s['mmax'] + 1)
     )
     N_sp = np.size(s['p_vec']) * np.size(s['s_vec'])
-    N_coeff_nm = 2 * N_nm*N_sp
+    N_coeff_nm = 2 * N_nm * N_sp
     if (
         np.size(s['m_e_d_Re'], 0) != N_nm
         or np.size(s['m_e_d_Re'], 1) != 2*N_sp

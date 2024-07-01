@@ -7,6 +7,8 @@ import numpy as np
 import design_SHA_Sq_i_Re_v2
 import design_SHA_Sq_e_Re_v2
 
+from paleokalmag.utils import dsh_basis
+
 
 def forward_Sq_d_Re(r, theta, phi, t, f107, s):
     # [B_1,B_2] = forward_Sq_d_Re(r,theta,phi,t,f107,s)
@@ -218,4 +220,183 @@ def forward_Sq_d_Re(r, theta, phi, t, f107, s):
     w = (1 + s['N']*f107)
     B_1 = np.vstack((B_r_1_tmp, B_theta_1_gg, B_phi_1_gg)) * w
     B_2 = np.vstack((B_r_2_tmp, B_theta_2_gg, B_phi_2_gg)) * w
+    return B_1, B_2
+
+
+def forward_Sq_d_Re_2(r, theta, phi, t, f107, s):
+    # convert to matrix if input parameter is scalar
+    max_size = max(
+        np.array(
+            (
+                [np.size(r)],
+                [np.size(theta)],
+                [np.size(phi)],
+                [np.size(t)],
+            )
+        )
+    )
+    if np.isscalar(r) or len(r) == 1:
+        r = np.multiply(r, np.ones(max_size))
+
+    if np.isscalar(theta) or len(theta) == 1:
+        theta = np.multiply(theta, np.ones(max_size))
+
+    if np.isscalar(phi) or len(phi) == 1:
+        phi = np.multiply(phi, np.ones(max_size))
+
+    if np.isscalar(t) or len(t) == 1:
+        t = np.multiply(t, np.ones(max_size))
+
+    if np.isscalar(f107) or len(f107) == 1:
+        f107 = np.multiply(f107, np.ones(max_size))
+
+    if (
+        np.size(t) != np.size(r)
+        or np.size(t) != np.size(theta)
+        or np.size(t) != np.size(phi)
+        or np.size(t) != np.size(f107)
+    ):
+        print(
+            np.size(t),
+            np.size(r),
+            np.size(theta),
+            np.size(phi),
+            np.size(f107),
+        )
+        raise Exception(r"Variables must be of equal size (or scalars)")
+
+    w_s = 2*np.pi
+    w_p = 2*np.pi / 24
+    N_data = np.size(theta, 0)
+
+    # calculate time in year (season) and MUT
+    t_1 = [
+        datetime.timedelta(int(t_iter), (t_iter - int(t_iter)) * 3600)
+        + datetime.datetime(2000, 1, 1)
+        for t_iter in t
+    ]
+    year = [t_iter.year for t_iter in t_1]
+    ndays = np.zeros(np.size(year))
+    for i in range(len(year)):
+        ndays[i] = (
+            datetime.datetime(year[i]+1, 1, 1)
+            - datetime.datetime(year[i], 1, 1)
+        ).days
+    # list comprehension must be converted to ndarray
+    t_season = np.array(
+        [
+            (t[i] - jd2000_dt.jd2000_dt(year[i], 1, 1, 0)) / ndays[i]
+            for i in range(len(ndays))
+        ]
+    )
+    # not inlcuded in HDGM version
+    t_season = t_season.flatten()
+    t_mut = getmut.getmut(t, s['theta_NGP'], s['phi_NGP'])
+
+    # calculate dipolar coordinates + matrix R
+    theta_d, phi_d, rotmat = gg2gm_2010.gg2gm_2010(theta, phi, get_R=True)
+
+    z_at = np.atleast_2d(
+        [
+            theta_d,
+            phi_d,
+            r,
+        ]
+    )
+
+    arr_internal = dsh_basis(s['nmax'], z_at, mmax=s['mmax'])
+
+    A_r_0_i = np.atleast_2d(-arr_internal[:, 2::3])
+    A_theta_0_i = np.atleast_2d(-arr_internal[:, 0::3])
+    A_phi_0_i = np.atleast_2d(arr_internal[:, 1::3])
+
+    s_vec = np.array(s['s_vec'])
+    p_vec = np.array(s['p_vec'])
+
+    beta = (
+        w_s * s_vec[:, None, None] * t_season[None, None, :]
+        + w_p * p_vec[None, :, None] * t_mut[None, None, :]
+    )
+    beta = beta.reshape(
+        -1, N_data
+    )
+    time_arr = np.array(
+        [
+            np.cos(beta),
+            np.sin(beta),
+        ]
+    )
+    time_arr = time_arr.transpose(1, 0, 2).reshape(-1, N_data)
+
+    if (min(r) > (6371.2 + s['h'])):
+        raise ValueError(
+            'Above the currents is not yet implemented.'
+        )
+    else:
+        arr_external = dsh_basis(
+            s['nmax'],
+            z_at,
+            mmax=s['mmax'],
+            internal=False,
+        )
+
+        A_r_0_e = np.atleast_2d(-arr_external[:, 2::3])
+        A_theta_0_e = np.atleast_2d(-arr_external[:, 0::3])
+        A_phi_0_e = np.atleast_2d(arr_external[:, 1::3])
+
+        B_r_1_tmp = np.einsum(
+            'ij, i..., j... ->...',
+            s['m_e_d_Re'],
+            A_r_0_e,
+            time_arr,
+        )
+        B_theta_1_tmp = np.einsum(
+            'ij, i..., j... ->...',
+            s['m_e_d_Re'],
+            A_theta_0_e,
+            time_arr,
+        )
+        B_phi_1_tmp = np.einsum(
+            'ij, i..., j... ->...',
+            s['m_e_d_Re'],
+            A_phi_0_e,
+            time_arr,
+        )
+
+        B_r_2_tmp = np.einsum(
+            'ij, i..., j... ->...',
+            s['m_i_d_Re'],
+            A_r_0_i,
+            time_arr,
+        )
+        B_theta_2_tmp = np.einsum(
+            'ij, i..., j... ->...',
+            s['m_i_d_Re'],
+            A_theta_0_i,
+            time_arr,
+        )
+        B_phi_2_tmp = np.einsum(
+            'ij, i..., j... ->...',
+            s['m_i_d_Re'],
+            A_phi_0_i,
+            time_arr,
+        )
+
+    # Rotate into geomagnetic frame
+    B_theta_1_gg = np.zeros(N_data)
+    B_phi_1_gg = np.zeros(N_data)
+    B_theta_2_gg = np.zeros(N_data)
+    B_phi_2_gg = np.zeros(N_data)
+    for i in range(N_data):
+        # get inverse of R
+        tmp = rotmat[i].transpose()
+        B_theta_1_gg = tmp[0, 0] * B_theta_1_tmp + tmp[0, 1] * B_phi_1_tmp
+        B_phi_1_gg = tmp[1, 0] * B_theta_1_tmp + tmp[1, 1] * B_phi_1_tmp
+        B_theta_2_gg = tmp[0, 0] * B_theta_2_tmp + tmp[0, 1] * B_phi_2_tmp
+        B_phi_2_gg = tmp[1, 0] * B_theta_2_tmp + tmp[1, 1] * B_phi_2_tmp
+    # correct for F10.7 dependence
+    w = (1 + s['N']*f107)
+    B_1 = np.vstack((B_r_1_tmp, B_theta_1_gg, B_phi_1_gg)) * w
+    B_2 = np.vstack((B_r_2_tmp, B_theta_2_gg, B_phi_2_gg)) * w
+
     return B_1, B_2

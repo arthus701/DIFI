@@ -305,10 +305,7 @@ def forward_Sq_d_Re_2(r, theta, phi, t, f107, s):
     )
 
     arr_internal = dsh_basis(s['nmax'], z_at, mmax=s['mmax'])
-
-    A_r_0_i = np.atleast_2d(-arr_internal[:, 2::3])
-    A_theta_0_i = np.atleast_2d(-arr_internal[:, 0::3])
-    A_phi_0_i = np.atleast_2d(arr_internal[:, 1::3])
+    arr_internal = arr_internal.reshape(-1, N_data, 3)
 
     s_vec = np.array(s['s_vec'])
     p_vec = np.array(s['p_vec'])
@@ -339,64 +336,42 @@ def forward_Sq_d_Re_2(r, theta, phi, t, f107, s):
             mmax=s['mmax'],
             internal=False,
         )
+        arr_external = arr_external.reshape(-1, N_data, 3)
 
-        A_r_0_e = np.atleast_2d(-arr_external[:, 2::3])
-        A_theta_0_e = np.atleast_2d(-arr_external[:, 0::3])
-        A_phi_0_e = np.atleast_2d(arr_external[:, 1::3])
-
-        B_r_1_tmp = np.einsum(
-            'ij, i..., j... ->...',
+        B_1_tmp = np.einsum(
+            'ij, ikl, jk ->lk',
             s['m_e_d_Re'],
-            A_r_0_e,
-            time_arr,
-        )
-        B_theta_1_tmp = np.einsum(
-            'ij, i..., j... ->...',
-            s['m_e_d_Re'],
-            A_theta_0_e,
-            time_arr,
-        )
-        B_phi_1_tmp = np.einsum(
-            'ij, i..., j... ->...',
-            s['m_e_d_Re'],
-            A_phi_0_e,
+            arr_external,
             time_arr,
         )
 
-        B_r_2_tmp = np.einsum(
-            'ij, i..., j... ->...',
+        B_2_tmp = np.einsum(
+            'ij, ikl, jk ->lk',
             s['m_i_d_Re'],
-            A_r_0_i,
-            time_arr,
-        )
-        B_theta_2_tmp = np.einsum(
-            'ij, i..., j... ->...',
-            s['m_i_d_Re'],
-            A_theta_0_i,
-            time_arr,
-        )
-        B_phi_2_tmp = np.einsum(
-            'ij, i..., j... ->...',
-            s['m_i_d_Re'],
-            A_phi_0_i,
+            arr_internal,
             time_arr,
         )
 
     # Rotate into geomagnetic frame
-    B_theta_1_gg = np.zeros(N_data)
-    B_phi_1_gg = np.zeros(N_data)
-    B_theta_2_gg = np.zeros(N_data)
-    B_phi_2_gg = np.zeros(N_data)
-    for i in range(N_data):
-        # get inverse of R
-        tmp = rotmat[i].transpose()
-        B_theta_1_gg = tmp[0, 0] * B_theta_1_tmp + tmp[0, 1] * B_phi_1_tmp
-        B_phi_1_gg = tmp[1, 0] * B_theta_1_tmp + tmp[1, 1] * B_phi_1_tmp
-        B_theta_2_gg = tmp[0, 0] * B_theta_2_tmp + tmp[0, 1] * B_phi_2_tmp
-        B_phi_2_gg = tmp[1, 0] * B_theta_2_tmp + tmp[1, 1] * B_phi_2_tmp
+    # fix minus sign
+    B_1_tmp[0] *= -1
+    B_1_tmp[2] *= -1
+    B_1_tmp[[0, 1]] = np.einsum(
+        'kij, jk -> ik',
+        rotmat.transpose(0, 2, 1),
+        B_1_tmp[[0, 1]],
+    )
+    B_2_tmp[0] *= -1
+    B_2_tmp[2] *= -1
+    B_2_tmp[[0, 1]] = np.einsum(
+        'kij, jk -> ik',
+        rotmat.transpose(0, 2, 1),
+        B_2_tmp[[0, 1]],
+    )
+
     # correct for F10.7 dependence
     w = (1 + s['N']*f107)
-    B_1 = np.vstack((B_r_1_tmp, B_theta_1_gg, B_phi_1_gg)) * w
-    B_2 = np.vstack((B_r_2_tmp, B_theta_2_gg, B_phi_2_gg)) * w
+    B_1 = B_1_tmp * w
+    B_2 = B_2_tmp * w
 
-    return B_1, B_2
+    return B_1[[2, 0, 1]], B_2[[2, 0, 1]]
